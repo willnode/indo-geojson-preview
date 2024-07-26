@@ -42,10 +42,14 @@
 
     <script>
       async function main() {
-        var map = L.map("map").setView(
-          [-7.056327342987004, 113.29730224609386],
-          10
-        );
+        var map = L.map("map", {
+          maxZoom: 18,
+          minZoom: 10,
+          maxBounds: [
+            [-6.887768, 112.673324],
+            [-7.252531, 114.170188],
+          ],
+        }).setView([-7.056327342987004, 113.29730224609386], 10);
 
         var tiles = L.tileLayer(
           "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -76,15 +80,14 @@
         }
 
         function expandGeo(json) {
+          let id = 1;
           return {
             type: "FeatureCollection",
             features: json.map((x) => ({
               type: "Feature",
-              id: x.district,
+              id: id++ + "",
               properties: {
-                name: [x.village, x.subdistrict, x.district]
-                  .filter((x) => x)
-                  .join(", "),
+                name: (x.village || x.subdistrict || x.district) + "",
               },
               geometry: genGeo(x.border),
             })),
@@ -92,9 +95,22 @@
         }
 
         const villageJson = await (await fetch("./village.json")).json();
-        const villageData = expandGeo(villageJson);
+        const subcityJson = await (await fetch("./subdistrict.json")).json();
         const citiesJson = await (await fetch("./cities.json")).json();
+        const villageData = expandGeo(villageJson);
+        const subdistrictData = expandGeo(subcityJson);
         const citiesData = expandGeo(citiesJson);
+        const layers = [];
+
+        function pushLayer(layer) {
+          if (layers.length > 0) {
+            map.removeLayer(layers[layers.length - 1]);
+          }
+          layers.push(layer);
+          map.addLayer(layer);
+        }
+
+        pushLayer(L.geoJSON(citiesData, { style, onEachFeature }));
 
         function style(feature) {
           return {
@@ -108,6 +124,13 @@
         }
 
         function onEachFeature(feature, layer) {
+          var bounds = layer.getBounds();
+          var center = bounds.getCenter();
+          layer.bindTooltip(feature.properties.name, {
+            permanent: true,
+            direction: "center",
+            className: "my-labels",
+          });
           layer.on({
             mouseover: function highlightFeature(e) {
               var layer = e.target;
@@ -123,20 +146,29 @@
               info.update(layer.feature.properties);
             },
             mouseout: function resetHighlight(e) {
-              villageLayer.resetStyle(e.target);
-              cityLayer.resetStyle(e.target);
+              layers[0].resetStyle(e.target);
               info.update();
             },
             click: function zoomToFeature(e) {
-              map.fitBounds(e.target.getBounds());
+              if (layers.length == 1) {
+                let name = e.target.feature.properties.name;
+                map.fitBounds(e.target.getBounds());
+                let geoJson = expandGeo(
+                  subcityJson.filter((x) => x.district == name)
+                );
+                pushLayer(L.geoJSON(geoJson, { style, onEachFeature }));
+              } else if (layers.length == 2) {
+                map.fitBounds(e.target.getBounds());
+                let name = e.target.feature.properties.name;
+                let geoJson = expandGeo(
+                  villageJson.filter((x) => x.subdistrict == name)
+                );
+                pushLayer(L.geoJSON(geoJson, { style, onEachFeature }));
+              } else if (layers.length == 3) {
+              }
             },
           });
         }
-
-        const villageLayer = L.geoJSON(villageData, { style, onEachFeature });
-        const cityLayer = L.geoJSON(citiesData, { style, onEachFeature });
-
-        map.addLayer(cityLayer);
 
         const info = L.control();
 
@@ -151,18 +183,17 @@
           this._div.innerHTML =
             "<h4>Peta</h4>" +
             (props ? "<b>" + props.name + "</b>" : "Hover ke peta") +
-            `<br><button onclick="switchTo('village')">Desa</button> / <button onclick="switchTo('city')">Kota</button>`;
+            `<br><button onclick="switchTo()">Ke Atas</button>`;
         };
 
         switchTo = function (mode) {
-          console.log(mode);
-          if (mode == "village") {
-            map.addLayer(villageLayer);
-            map.removeLayer(cityLayer);
-          } else {
-            map.addLayer(cityLayer);
-            map.removeLayer(villageLayer);
-          }
+          if (layers.length == 1) return;
+          map.removeLayer(layers.pop());
+          map.addLayer(layers[layers.length - 1]);
+          let bounds = layers[layers.length - 1].getBounds();
+          if (layers.length == 1)
+            map.setView([-7.056327342987004, 113.29730224609386], 10);
+          else map.fitBounds(bounds);
         };
 
         info.addTo(map);
